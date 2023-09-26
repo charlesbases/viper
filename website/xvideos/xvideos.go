@@ -5,8 +5,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pkg/errors"
-
 	"github.com/charlesbases/viper/logger"
 	"github.com/charlesbases/viper/website"
 )
@@ -32,6 +30,11 @@ type hook struct {
 	link website.Link
 }
 
+// WebHome 网站首页
+func (h *hook) WebHome() string {
+	return rootDir
+}
+
 // LinkType 链接类型
 func (h *hook) LinkType() website.LinkType {
 	if linkTypeVideo.MatchString(h.link.String()) {
@@ -44,21 +47,21 @@ func (h *hook) LinkType() website.LinkType {
 }
 
 // Resources 资源列表
-func (h *hook) Resources() (chan *website.RsVideo, error) {
-	var inf = &website.RsInfo{RootDir: rootDir}
+func (h *hook) Resources() (*website.RsInfo, error) {
+	var inf = website.NewRsInfo(rootDir)
 
 	switch h.LinkType() {
 	case website.LinkTypeVideo:
-		var vc = make(chan *website.RsVideo, 0)
+		inf.Total(1)
 
 		go func() {
 			if video := h.video(inf, h.link); video != nil {
-				vc <- video
+				inf.Push(video)
 			}
-			close(vc)
+			inf.Close()
 		}()
 
-		return vc, nil
+		return inf, nil
 	case website.LinkTypeUploader:
 		return h.videos(inf, h.link)
 	default:
@@ -74,12 +77,12 @@ type UploaderResponse struct {
 }
 
 // videos 艺术家主页视频解析
-func (h *hook) videos(inf *website.RsInfo, link website.Link) (chan *website.RsVideo, error) {
+func (h *hook) videos(inf *website.RsInfo, link website.Link) (*website.RsInfo, error) {
 	inf.Uploader = filepath.Base(link.String())
 
-	var vc = make(chan *website.RsVideo, 0)
+	var suffixs = make([]string, 0)
 
-	go func() {
+	{
 		var page int
 		for {
 			var resp = new(UploaderResponse)
@@ -91,25 +94,33 @@ func (h *hook) videos(inf *website.RsInfo, link website.Link) (chan *website.RsV
 				}
 				for _, video := range resp.Videos {
 					if suffix := findSubstring(regexpVideoSuffix(inf.Uploader), video.U); len(suffix) != 0 {
-						if v := h.video(inf, rootHome.Join("video"+suffix)); v != nil {
-							vc <- v
-						}
+						suffixs = append(suffixs, "video"+suffix)
 					}
-					page++
 				}
+				page++
+			}
+		}
+	}
+
+	inf.Total(len(suffixs))
+
+	go func() {
+		for _, suffix := range suffixs {
+			if video := h.video(inf, rootHome.Join(suffix)); video != nil {
+				inf.Push(video)
 			}
 		}
 
-		close(vc)
+		inf.Close()
 	}()
 
-	return vc, nil
+	return inf, nil
 }
 
 // video 视频链接解析
 func (h *hook) video(inf *website.RsInfo, link website.Link) *website.RsVideo {
-	if id := findSubstring(regexpVideoID, link.String()); len(id) != 0 {
-		var video = &website.RsVideo{Inf: inf, ID: id}
+	if id := findSubstring(regexpVideoID, link.String()); len(id) != 0 && inf.IsNotExist(id) {
+		var video = &website.RsVideo{ID: id}
 
 		// hls
 		if err := link.Fetch(website.ReadLine(func(line string) (isBreak bool) {
@@ -121,15 +132,11 @@ func (h *hook) video(inf *website.RsInfo, link website.Link) *website.RsVideo {
 			}
 			return len(inf.Uploader) != 0 && len(video.Hlink) != 0
 		})); err != nil {
-			if errors.Is(err, website.ErrNotFound) {
-				logger.Errorf("%s: 404", link)
-			} else {
-				logger.Errorf("%s: %v", link, err)
-			}
+			logger.Error(err)
 		}
 
 		// parts
-		if len(video.Hlink) != 0 && video.IsNotExist() {
+		if len(video.Hlink) != 0 {
 			h.parts(video)
 			return video
 		}
@@ -157,7 +164,6 @@ func (h *hook) parts(video *website.RsVideo) {
 		}
 		return false
 	}))
-
 }
 
 // H .

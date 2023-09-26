@@ -1,6 +1,7 @@
 package website
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,8 +12,17 @@ import (
 	"github.com/charlesbases/viper/logger"
 )
 
-// ErrLinkType 错误的视频链接
-var ErrLinkType = func(link Link) error { return errors.Errorf("invalid link of %s", link) }
+// concurrent 并发下载数
+var concurrent = 10
+
+var (
+	// ErrLinkType 错误的视频链接
+	ErrLinkType = func(link Link) error { return errors.Errorf("invalid link of %s", link) }
+	// ErrUndefind 未知的视频创作者
+	ErrUndefind = func(home string) error {
+		return errors.Errorf("%s: uploader is undefind", home)
+	}
+)
 
 // rootDir 视频资源文件夹
 var rootDir = func() string {
@@ -53,12 +63,54 @@ func NewResolutionRule(rule func(v string) int) *RsResolution {
 
 // RsInfo .
 type RsInfo struct {
-	RootDir  string
+	// RootDir 视频文件夹
+	RootDir string
+	// Uploader 创作者
 	Uploader string
+	// videoc videos chan
+	videoc chan *RsVideo
 
-	// err error of os.MkdirAll
-	err  error
-	once sync.Once
+	// total 视频数量
+	total int
+	// count 已下载视频数
+	count int
+
+	group sync.WaitGroup
+}
+
+// NewRsInfo .
+func NewRsInfo(root string) *RsInfo {
+	return &RsInfo{RootDir: root, videoc: make(chan *RsVideo, concurrent)}
+}
+
+// Total .
+func (inf *RsInfo) Total(total int) {
+	inf.total = total
+}
+
+// Push .
+func (inf *RsInfo) Push(video *RsVideo) {
+	inf.videoc <- video
+}
+
+// Close .
+func (inf *RsInfo) Close() {
+	close(inf.videoc)
+}
+
+// IsNotExist .
+func (inf *RsInfo) IsNotExist(id string) bool {
+	if len(inf.Uploader) != 0 {
+		_, err := os.Stat(inf.videopath(id))
+		return err != nil
+	}
+	logger.Error(ErrUndefind(inf.RootDir))
+	return true
+}
+
+// videopath return video path
+func (inf *RsInfo) videopath(id string) string {
+	return filepath.Join(inf.folder(), id+".mkv")
 }
 
 // folder .
@@ -66,19 +118,66 @@ func (inf *RsInfo) folder() string {
 	return filepath.Join(rootDir, inf.RootDir, inf.Uploader)
 }
 
-// mkdir .
-func (inf *RsInfo) mkdir() error {
-	inf.once.Do(func() {
-		inf.err = os.MkdirAll(inf.folder(), 0755)
-		logger.Error(inf.err)
-	})
-	return inf.err
+// done .
+func (inf *RsInfo) done() {
+	inf.group.Add(-1)
+	inf.count++
+	inf.bar()
+}
+
+// bar .
+func (inf *RsInfo) bar() {
+	fmt.Printf("\r%s/%s: [%d/%d]", inf.RootDir, inf.Uploader, inf.count, inf.total)
+}
+
+// download .
+func (inf *RsInfo) download() error {
+	if err := os.MkdirAll(inf.folder(), 0755); err != nil {
+		return err
+	}
+
+	inf.group.Add(inf.total)
+
+	var works = make(chan struct{}, concurrent)
+	for i := 0; i < concurrent; i++ {
+		works <- struct{}{}
+	}
+
+	for video := range inf.videoc {
+		inf.bar()
+
+		go func(v *RsVideo) {
+			<-works
+			var name = inf.videopath(v.ID)
+			if f, err := os.OpenFile(name, os.O_CREATE, 0644); err != nil {
+				logger.Error(err)
+			} else {
+				for _, part := range v.Parts {
+					if err := part.Fetch(WriteTo(f)); err != nil {
+						f.Close()
+						os.Remove(name)
+						logger.Error(err)
+						goto finish
+					}
+				}
+				f.Close()
+			}
+
+		finish:
+			works <- struct{}{}
+			inf.done()
+		}(video)
+	}
+
+	inf.group.Wait()
+	close(works)
+
+	fmt.Println(" [ok]")
+	return nil
 }
 
 // RsVideo .
 type RsVideo struct {
-	Inf *RsInfo
-
 	// ID 视频 ID
 	ID string
 	// Hlink hls link
@@ -87,54 +186,25 @@ type RsVideo struct {
 	Parts []Link
 }
 
-// absname .
-func (v *RsVideo) absname() string {
-	return filepath.Join(v.Inf.folder(), v.ID+".mkv")
-}
-
-// download .
-func (v *RsVideo) download() error {
-	if err := v.Inf.mkdir(); err != nil {
-		return err
+// SetConcurrent .
+func SetConcurrent(c int) {
+	if c != 0 {
+		concurrent = c
 	}
-
-	// 视频下载
-	file, err := os.OpenFile(v.absname(), os.O_CREATE, 0644)
-	if err != nil {
-		return err
-	}
-
-	for _, part := range v.Parts {
-		if err := part.Fetch(WriteTo(file)); err != nil {
-			file.Close()
-			os.Remove(v.absname())
-			return err
-		}
-	}
-
-	return file.Close()
-}
-
-// IsNotExist .
-func (v *RsVideo) IsNotExist() bool {
-	_, err := os.Stat(v.absname())
-	return err != nil
 }
 
 // WebHook .
 type WebHook interface {
+	WebHome() string
 	LinkType() LinkType
-	Resources() (chan *RsVideo, error)
+	Resources() (*RsInfo, error)
 }
 
 // H .
 func H(hook WebHook) error {
-	if videos, err := hook.Resources(); err != nil {
+	if inf, err := hook.Resources(); err != nil {
 		return err
 	} else {
-		for video := range videos {
-			logger.Error(video.download())
-		}
+		return inf.download()
 	}
-	return nil
 }

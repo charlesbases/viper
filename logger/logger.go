@@ -24,7 +24,7 @@ func init() {
 func Error(v ...interface{}) {
 	if len(v) != 0 && v[0] != nil {
 		lock.Lock()
-		log.Write([]byte("Err: " + fmt.Sprint(v...)))
+		log.Write([]byte("Err: " + fmt.Sprint(v...) + "\n"))
 		lock.Unlock()
 	}
 }

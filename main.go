@@ -29,8 +29,15 @@ var app = &cli.App{
 			Usage: "load video link from file",
 			Value: "index.txt",
 		},
+		cli.IntFlag{
+			Name:  "c",
+			Usage: "number of videos downloaded at the same time",
+			Value: 3,
+		},
 	},
 	Action: func(ctx *cli.Context) error {
+		website.SetConcurrent(ctx.Int("c"))
+
 		// with os.args
 		if len(ctx.Args()) != 0 {
 			return dload(os.Args...)

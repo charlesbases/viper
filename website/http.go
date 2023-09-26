@@ -5,15 +5,21 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pkg/errors"
 )
 
-var ErrNotFound = errors.New("not found")
+var (
+	// ErrUnknown .
+	ErrUnknown errorCode = -1
+	// ErrNotFound 404
+	ErrNotFound errorCode = 404
+)
 
-var defaultClient = &http.Client{Timeout: 30 * time.Second}
+var defaultClient = &http.Client{Timeout: 24 * time.Hour}
 
 var defaultHeader = map[string]string{
 	// "Content-Type": "application/json",
@@ -21,8 +27,16 @@ var defaultHeader = map[string]string{
 	"User-Agent": "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Googlebot/2.1; +http://www.google.com/bot.html) Chrome/W.X.Y.Z Safari/537.36",
 }
 
+type errorCode int
+
+// Error .
+func (code errorCode) Error() string {
+	return strconv.Itoa(int(code))
+}
+
 type reader func(r io.Reader) error
 
+// Metadata .
 type Metadata struct {
 	Method string
 	Header map[string]string
@@ -54,11 +68,14 @@ func fetch(l Link, fn reader, opts ...func(meta *Metadata)) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 404 {
-		return ErrNotFound
+	switch resp.StatusCode {
+	case 200:
+		return errors.Wrap(fn(resp.Body), l.String())
+	case 404:
+		return errors.Wrap(ErrNotFound, l.String())
+	default:
+		return errors.Wrap(ErrUnknown, l.String())
 	}
-
-	return fn(resp.Body)
 }
 
 // ReadLine .
