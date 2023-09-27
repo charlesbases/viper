@@ -7,6 +7,7 @@ import (
 
 	"github.com/charlesbases/viper/logger"
 	"github.com/charlesbases/viper/website"
+	"github.com/charlesbases/viper/website/xvideos/rp"
 )
 
 const (
@@ -37,10 +38,10 @@ func (h *hook) WebHome() string {
 
 // LinkType 链接类型
 func (h *hook) LinkType() website.LinkType {
-	if linkTypeVideo.MatchString(h.link.String()) {
+	if rp.TypeVideo.MatchString(h.link.String()) {
 		return website.LinkTypeVideo
 	}
-	if linkTypeUploader.MatchString(h.link.String()) {
+	if rp.TypeUploader.MatchString(h.link.String()) {
 		return website.LinkTypeUploader
 	}
 	return website.LinkTypeUnknown
@@ -63,7 +64,7 @@ func (h *hook) Resources() (*website.RsInfo, error) {
 
 		return inf, nil
 	case website.LinkTypeUploader:
-		return h.videos(inf, h.link)
+		return h.videos(inf)
 	default:
 		return nil, website.ErrLinkType(h.link)
 	}
@@ -77,8 +78,10 @@ type UploaderResponse struct {
 }
 
 // videos 艺术家主页视频解析
-func (h *hook) videos(inf *website.RsInfo, link website.Link) (*website.RsInfo, error) {
-	inf.Uploader = filepath.Base(link.String())
+func (h *hook) videos(inf *website.RsInfo) (*website.RsInfo, error) {
+	h.link = website.Link(strings.Split(h.link.String(), "#")[0])
+
+	inf.Uploader = filepath.Base(h.link.String())
 
 	var suffixs = make([]string, 0)
 
@@ -86,14 +89,14 @@ func (h *hook) videos(inf *website.RsInfo, link website.Link) (*website.RsInfo, 
 		var page int
 		for {
 			var resp = new(UploaderResponse)
-			if err := link.Join("videos", "new", strconv.Itoa(page)).Fetch(website.Unmarshal(resp)); err != nil {
+			if err := h.link.Join("videos", "new", strconv.Itoa(page)).Fetch(website.Unmarshal(resp)); err != nil {
 				logger.Error(err)
 			} else {
 				if len(resp.Videos) == 0 {
 					break
 				}
 				for _, video := range resp.Videos {
-					if suffix := findSubstring(regexpVideoSuffix(inf.Uploader), video.U); len(suffix) != 0 {
+					if suffix := website.FindSubstring(rp.VideoSuffix(inf.Uploader), video.U); len(suffix) != 0 {
 						suffixs = append(suffixs, "video"+suffix)
 					}
 				}
@@ -119,16 +122,19 @@ func (h *hook) videos(inf *website.RsInfo, link website.Link) (*website.RsInfo, 
 
 // video 视频链接解析
 func (h *hook) video(inf *website.RsInfo, link website.Link) *website.RsVideo {
-	if id := findSubstring(regexpVideoID, link.String()); len(id) != 0 && inf.IsNotExist(id) {
-		var video = &website.RsVideo{ID: id}
+	if id := website.FindSubstring(rp.VideoID, link.String()); len(id) != 0 && !inf.IsExist(id) {
+		var video = &website.RsVideo{ID: id, Link: link}
 
 		// hls
 		if err := link.Fetch(website.ReadLine(func(line string) (isBreak bool) {
+			if video.Duration == 0 {
+				video.Duration = website.Duration(website.FindSubnumber(rp.VideoDuration, line))
+			}
 			if len(video.Hlink) == 0 {
-				video.Hlink = website.Link(findSubstring(regexpVideoHls, line))
+				video.Hlink = website.Link(website.FindSubstring(rp.VideoHls, line))
 			}
 			if len(inf.Uploader) == 0 {
-				inf.Uploader = findSubstring(regexpVideoUploader, line)
+				inf.Uploader = website.FindSubstring(rp.VideoUploader, line)
 			}
 			return len(inf.Uploader) != 0 && len(video.Hlink) != 0
 		})); err != nil {

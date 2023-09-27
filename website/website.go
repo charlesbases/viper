@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -12,16 +13,15 @@ import (
 	"github.com/charlesbases/viper/logger"
 )
 
+// format 视频文件格式
+const format = "mkv"
+
 // concurrent 并发下载数
 var concurrent = 10
 
 var (
 	// ErrLinkType 错误的视频链接
 	ErrLinkType = func(link Link) error { return errors.Errorf("invalid link of %s", link) }
-	// ErrUndefind 未知的视频创作者
-	ErrUndefind = func(home string) error {
-		return errors.Errorf("%s: uploader is undefind", home)
-	}
 )
 
 // rootDir 视频资源文件夹
@@ -75,6 +75,7 @@ type RsInfo struct {
 	// count 已下载视频数
 	count int
 
+	lock  sync.RWMutex
 	group sync.WaitGroup
 }
 
@@ -98,19 +99,33 @@ func (inf *RsInfo) Close() {
 	close(inf.videoc)
 }
 
-// IsNotExist .
-func (inf *RsInfo) IsNotExist(id string) bool {
+// IsExist 视频文件是否下载
+func (inf *RsInfo) IsExist(id string) bool {
 	if len(inf.Uploader) != 0 {
-		_, err := os.Stat(inf.videopath(id))
-		return err != nil
+		if entry, err := os.ReadDir(inf.folder()); err != nil {
+			logger.Error(err)
+			return false
+		} else {
+			for _, val := range entry {
+				if !val.IsDir() && strings.HasPrefix(val.Name(), id) {
+					return true
+				}
+			}
+			return false
+		}
 	}
-	logger.Error(ErrUndefind(inf.RootDir))
+	logger.Errorf("%s: unknown video uploader")
 	return true
 }
 
 // videopath return video path
-func (inf *RsInfo) videopath(id string) string {
-	return filepath.Join(inf.folder(), id+".mkv")
+func (inf *RsInfo) videopath(v *RsVideo) string {
+	if v.Duration != 0 {
+		return filepath.Join(inf.folder(), strings.Join([]string{v.ID, v.Duration.Encode(), format}, "."))
+	}
+
+	logger.Errorf("%s: unknown video duration")
+	return filepath.Join(inf.folder(), strings.Join([]string{v.ID, format}, "."))
 }
 
 // folder .
@@ -121,13 +136,19 @@ func (inf *RsInfo) folder() string {
 // done .
 func (inf *RsInfo) done() {
 	inf.group.Add(-1)
+
+	inf.lock.Lock()
 	inf.count++
+	inf.lock.Unlock()
+
 	inf.bar()
 }
 
 // bar .
 func (inf *RsInfo) bar() {
+	inf.lock.RLock()
 	fmt.Printf("\r%s/%s: [%d/%d]", inf.RootDir, inf.Uploader, inf.count, inf.total)
+	inf.lock.RUnlock()
 }
 
 // download .
@@ -148,7 +169,7 @@ func (inf *RsInfo) download() error {
 
 		go func(v *RsVideo) {
 			<-works
-			var name = inf.videopath(v.ID)
+			var name = inf.videopath(v)
 			if f, err := os.OpenFile(name, os.O_CREATE, 0644); err != nil {
 				logger.Error(err)
 			} else {
@@ -180,8 +201,12 @@ func (inf *RsInfo) download() error {
 type RsVideo struct {
 	// ID 视频 ID
 	ID string
+	// Link 网页视频链接
+	Link Link
 	// Hlink hls link
 	Hlink Link
+	// Duration 视频时长
+	Duration Duration
 	// Parts parts of video
 	Parts []Link
 }
