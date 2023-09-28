@@ -2,6 +2,7 @@ package website
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,11 +25,13 @@ var (
 	ErrLinkType = func(link Link) error { return errors.Errorf("invalid link of %s", link) }
 )
 
-// rootDir 视频资源文件夹
-var rootDir = func() string {
-	abs, err := filepath.Abs("resources")
-	logger.Error(errors.Wrap(err, "abs of resources"))
-	return abs
+// root 视频资源文件夹
+var root = func() string {
+	if abs, err := filepath.Abs("resources"); err != nil {
+		panic(err)
+	} else {
+		return abs
+	}
 }()
 
 // RsResolution .
@@ -61,12 +64,8 @@ func NewResolutionRule(rule func(v string) int) *RsResolution {
 	return &RsResolution{rule: rule, list: make([]string, 0, 8)}
 }
 
-// RsInfo .
-type RsInfo struct {
-	// RootDir 视频文件夹
-	RootDir string
-	// Uploader 创作者
-	Uploader string
+// rsInfo .
+type rsInfo struct {
 	// videoc videos chan
 	videoc chan *RsVideo
 
@@ -80,46 +79,27 @@ type RsInfo struct {
 }
 
 // NewRsInfo .
-func NewRsInfo(root string) *RsInfo {
-	return &RsInfo{RootDir: root, videoc: make(chan *RsVideo, concurrent)}
+func NewRsInfo(root string) *rsInfo {
+	return &rsInfo{RootDir: root, videoc: make(chan *RsVideo, concurrent)}
 }
 
 // Total .
-func (inf *RsInfo) Total(total int) {
+func (inf *rsInfo) Total(total int) {
 	inf.total = total
 }
 
 // Push .
-func (inf *RsInfo) Push(video *RsVideo) {
+func (inf *rsInfo) Push(video *RsVideo) {
 	inf.videoc <- video
 }
 
 // Close .
-func (inf *RsInfo) Close() {
+func (inf *rsInfo) Close() {
 	close(inf.videoc)
 }
 
-// IsExist 视频文件是否下载
-func (inf *RsInfo) IsExist(id string) bool {
-	if len(inf.Uploader) != 0 {
-		if entry, err := os.ReadDir(inf.folder()); err != nil {
-			logger.Error(err)
-			return false
-		} else {
-			for _, val := range entry {
-				if !val.IsDir() && strings.HasPrefix(val.Name(), id) {
-					return true
-				}
-			}
-			return false
-		}
-	}
-	logger.Errorf("%s: unknown video uploader")
-	return true
-}
-
 // videopath return video path
-func (inf *RsInfo) videopath(v *RsVideo) string {
+func (inf *rsInfo) videopath(v *RsVideo) string {
 	if v.Duration != 0 {
 		return filepath.Join(inf.folder(), strings.Join([]string{v.ID, v.Duration.Encode(), format}, "."))
 	}
@@ -129,12 +109,12 @@ func (inf *RsInfo) videopath(v *RsVideo) string {
 }
 
 // folder .
-func (inf *RsInfo) folder() string {
-	return filepath.Join(rootDir, inf.RootDir, inf.Uploader)
+func (inf *rsInfo) folder() string {
+	return filepath.Join(root, inf.RootDir, inf.Uploader)
 }
 
 // done .
-func (inf *RsInfo) done() {
+func (inf *rsInfo) done() {
 	inf.group.Add(-1)
 
 	inf.lock.Lock()
@@ -145,14 +125,14 @@ func (inf *RsInfo) done() {
 }
 
 // bar .
-func (inf *RsInfo) bar() {
+func (inf *rsInfo) bar() {
 	inf.lock.RLock()
 	fmt.Printf("\r%s/%s: [%d/%d]", inf.RootDir, inf.Uploader, inf.count, inf.total)
 	inf.lock.RUnlock()
 }
 
 // download .
-func (inf *RsInfo) download() error {
+func (inf *rsInfo) download() error {
 	if err := os.MkdirAll(inf.folder(), 0755); err != nil {
 		return err
 	}
@@ -211,6 +191,24 @@ type RsVideo struct {
 	Parts []Link
 }
 
+// IsExist .
+func (v *RsVideo) IsExist() (isExist bool) {
+	if len(v.ID) == 0 {
+		logger.Errorf("%s: id is empty", v.Link)
+		return true
+	}
+
+	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if !d.IsDir() && strings.HasPrefix(filepath.Base(path), v.ID) {
+			isExist = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+
+	return
+}
+
 // SetConcurrent .
 func SetConcurrent(c int) {
 	if c != 0 {
@@ -220,16 +218,32 @@ func SetConcurrent(c int) {
 
 // WebHook .
 type WebHook interface {
-	WebHome() string
-	LinkType() LinkType
-	Resources() (*RsInfo, error)
+	// WebHome 视频网站首页
+	WebHome() Link
+	// LinkList 视频链接列表
+	LinkList() []Link
+
+	// ParseVideo 根据视频链接，获取下载地址
+	ParseVideo(link Link) (*RsVideo, error)
+	// Resources 视频资源
+	Resources() (*rsInfo, error)
 }
 
 // H .
 func H(hook WebHook) error {
-	if inf, err := hook.Resources(); err != nil {
-		return err
-	} else {
-		return inf.download()
+	var works = make(chan struct{}, concurrent)
+	for i := 0; i < concurrent; i++ {
+		works <- struct{}{}
+	}
+
+	for _, val := range hook.LinkList() {
+		link := val
+		go func() {
+			<-works
+			video, err := hook.ParseVideo(link)
+			if err != nil {
+				logger.Error()
+			}
+		}()
 	}
 }

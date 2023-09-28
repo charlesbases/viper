@@ -1,16 +1,6 @@
 package xvideos
 
-import (
-	"path/filepath"
-	"strconv"
-	"strings"
-
-	"github.com/charlesbases/viper/logger"
-	"github.com/charlesbases/viper/website"
-	"github.com/charlesbases/viper/website/xvideos/rp"
-)
-
-const (
+/*const (
 	// rootDir 下载文件夹
 	rootDir = "xvideos.com"
 	// rootHome 视频网站主页
@@ -176,3 +166,4 @@ func (h *hook) parts(video *website.RsVideo) {
 func H(link website.Link) website.WebHook {
 	return &hook{link: link}
 }
+*/
