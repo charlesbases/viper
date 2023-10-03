@@ -2,7 +2,8 @@ package website
 
 import (
 	"fmt"
-	"strings"
+	"io/fs"
+	"path/filepath"
 	"testing"
 )
 
@@ -29,5 +30,14 @@ func TestDuration(t *testing.T) {
 }
 
 func Test(t *testing.T) {
-	fmt.Println(strings.Join([]string{"12345", Duration(0).Encode(), format}, "."))
+	err := filepath.WalkDir("../resources", func(path string, d fs.DirEntry, err error) error {
+		if !d.IsDir() {
+			fmt.Println(path)
+			return fs.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Println(err)
+	}
 }

@@ -1,7 +1,6 @@
 package rp
 
 import (
-	"fmt"
 	"regexp"
 )
 
@@ -14,9 +13,11 @@ var (
 
 var (
 	// VideoSuffix 根据艺术家主页的视频列表，获取视频链接
-	VideoSuffix = func(uploader string) *regexp.Regexp { return regexp.MustCompile(fmt.Sprintf(`.*/%s/(.+)`, uploader)) }
-	// VideoUploader 根据视频链接，获取艺术家
-	VideoUploader = regexp.MustCompile(`html5player[.]setUploaderName[(]'(.*)'[)];`)
+	VideoSuffix = regexp.MustCompile(`.*/([1-9]+.*)`)
+	// VideoUploaderWithLink 根据视频链接，获取艺术家
+	VideoUploaderWithLink = regexp.MustCompile(`https://www.xvideos.com/amateur-channels/(.*)`)
+	// VideoUploaderWithHTML 根据视频链接，获取艺术家
+	VideoUploaderWithHTML = regexp.MustCompile(`html5player[.]setUploaderName[(]'(.*)'[)];`)
 	// VideoDuration 获取视频时长
 	VideoDuration = regexp.MustCompile(`<meta property="og:duration" content="(.*)" />`)
 	// VideoHls 获取视频下载链接

@@ -1,20 +1,14 @@
 package xvideos
 
 import (
-	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/pkg/errors"
 
 	"github.com/charlesbases/viper/logger"
 	"github.com/charlesbases/viper/website"
 	"github.com/charlesbases/viper/website/xvideos/rp"
-)
-
-const (
-	// rootDir 下载文件夹
-	rootDir = "xvideos.com"
-	// rootHome 视频网站主页
-	rootHome website.Link = "https://www.xvideos.com"
 )
 
 var bestResolution = func(v string) int {
@@ -27,47 +21,15 @@ var bestResolution = func(v string) int {
 	return -1
 }
 
-type hook struct {
-	link website.Link
+// xvideos .
+type xvideos struct {
+	res website.Link
+	inf *website.RsInfo
 }
 
 // WebHome 网站首页
-func (h *hook) WebHome() string {
-	return rootDir
-}
-
-// LinkType 链接类型
-func (h *hook) LinkType() website.LinkType {
-	if rp.TypeVideo.MatchString(h.link.String()) {
-		return website.LinkTypeVideo
-	}
-	if rp.TypeUploader.MatchString(h.link.String()) {
-		return website.LinkTypeUploader
-	}
-	return website.LinkTypeUnknown
-}
-
-// Resources 资源列表
-func (h *hook) Resources() (*website.RsInfo, error) {
-	var inf = website.NewRsInfo(rootDir)
-
-	switch h.LinkType() {
-	case website.LinkTypeVideo:
-		inf.Total(1)
-
-		go func() {
-			if video := h.video(inf, h.link); video != nil {
-				inf.Push(video)
-			}
-			inf.Close()
-		}()
-
-		return inf, nil
-	case website.LinkTypeUploader:
-		return h.videos(inf)
-	default:
-		return nil, website.ErrLinkType(h.link)
-	}
+func (x *xvideos) WebHome() website.Link {
+	return "https://www.xvideos.com"
 }
 
 // UploaderResponse 艺术家主页
@@ -77,81 +39,85 @@ type UploaderResponse struct {
 	} `json:"videos"`
 }
 
-// videos 艺术家主页视频解析
-func (h *hook) videos(inf *website.RsInfo) (*website.RsInfo, error) {
-	h.link = website.Link(strings.Split(h.link.String(), "#")[0])
+// LinkList 视频链接列表
+func (x *xvideos) LinkList() *website.RsInfo {
+	x.inf.LinkList = make([]*website.RsVideoDesc, 0)
+	// 视频链接
+	if rp.TypeVideo.MatchString(x.res.String()) {
+		x.inf.LinkList = append(x.inf.LinkList,
+			&website.RsVideoDesc{
+				ID:   website.FindSubstring(rp.VideoID, x.res.String()),
+				Link: x.res,
+			})
+		return x.inf
+	}
 
-	inf.Uploader = filepath.Base(h.link.String())
+	// 艺术家链接
+	if rp.TypeUploader.MatchString(x.res.String()) {
+		x.inf.Uploader = website.FindSubstring(rp.VideoUploaderWithLink, x.res.String())
 
-	var suffixs = make([]string, 0)
-
-	{
 		var page int
 		for {
 			var resp = new(UploaderResponse)
-			if err := h.link.Join("videos", "new", strconv.Itoa(page)).Fetch(website.Unmarshal(resp)); err != nil {
+			if err := x.res.Join("videos", "new", strconv.Itoa(page)).Fetch(website.Unmarshal(resp)); err != nil {
 				logger.Error(err)
+				break
 			} else {
 				if len(resp.Videos) == 0 {
 					break
 				}
 				for _, video := range resp.Videos {
-					if suffix := website.FindSubstring(rp.VideoSuffix(inf.Uploader), video.U); len(suffix) != 0 {
-						suffixs = append(suffixs, "video"+suffix)
+					if suffix := website.FindSubstring(rp.VideoSuffix, video.U); len(suffix) != 0 {
+						link := x.WebHome().Join("video" + suffix)
+						x.inf.LinkList = append(x.inf.LinkList,
+							&website.RsVideoDesc{
+								ID:   website.FindSubstring(rp.VideoID, link.String()),
+								Link: link,
+							})
 					}
 				}
 				page++
 			}
 		}
+
+		return x.inf
 	}
 
-	inf.Total(len(suffixs))
-
-	go func() {
-		for _, suffix := range suffixs {
-			if video := h.video(inf, rootHome.Join(suffix)); video != nil {
-				inf.Push(video)
-			}
-		}
-
-		inf.Close()
-	}()
-
-	return inf, nil
+	logger.Errorf("%s: unknown link type")
+	return nil
 }
 
-// video 视频链接解析
-func (h *hook) video(inf *website.RsInfo, link website.Link) *website.RsVideo {
-	if id := website.FindSubstring(rp.VideoID, link.String()); len(id) != 0 && !inf.IsExist(id) {
-		var video = &website.RsVideo{ID: id, Link: link}
+// ParseVideo 根据视频链接，获取下载地址
+func (x *xvideos) ParseVideo(v *website.RsVideoDesc) (*website.RsVideo, error) {
+	if len(v.ID) != 0 {
+		var video = &website.RsVideo{RsVideoDesc: *v}
 
 		// hls
-		if err := link.Fetch(website.ReadLine(func(line string) (isBreak bool) {
+		if err := v.Link.Fetch(website.ReadLine(func(line string) (isBreak bool) {
 			if video.Duration == 0 {
 				video.Duration = website.Duration(website.FindSubnumber(rp.VideoDuration, line))
 			}
 			if len(video.Hlink) == 0 {
 				video.Hlink = website.Link(website.FindSubstring(rp.VideoHls, line))
 			}
-			if len(inf.Uploader) == 0 {
-				inf.Uploader = website.FindSubstring(rp.VideoUploader, line)
+			if len(x.inf.Uploader) == 0 {
+				x.inf.Uploader = website.FindSubstring(rp.VideoUploaderWithHTML, line)
 			}
-			return len(inf.Uploader) != 0 && len(video.Hlink) != 0
+			return len(x.inf.Uploader) != 0 && len(video.Hlink) != 0
 		})); err != nil {
 			logger.Error(err)
 		}
 
 		// parts
 		if len(video.Hlink) != 0 {
-			h.parts(video)
-			return video
+			return x.videoParts(video), nil
 		}
 	}
-	return nil
+	return nil, errors.New("unknown id for this video")
 }
 
-// parts 视频分片链接解析
-func (h *hook) parts(video *website.RsVideo) {
+// videoParts .
+func (x *xvideos) videoParts(video *website.RsVideo) *website.RsVideo {
 	var rst = website.NewResolutionRule(bestResolution)
 
 	// 分辨率
@@ -170,9 +136,11 @@ func (h *hook) parts(video *website.RsVideo) {
 		}
 		return false
 	}))
+
+	return video
 }
 
-// H .
-func H(link website.Link) website.WebHook {
-	return &hook{link: link}
+// New .
+func New(res website.Link) website.WebHook {
+	return &xvideos{res: res, inf: &website.RsInfo{RootDir: "xvideos.com"}}
 }

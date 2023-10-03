@@ -16,7 +16,7 @@ var home = regexp.MustCompile(`https://([^/]+)`)
 
 // homeHook 视频网站首页
 var homeHook = map[string]func(link website.Link) website.WebHook{
-	"www.xvideos.com": xvideos.H,
+	"www.xvideos.com": xvideos.New,
 }
 
 var app = &cli.App{
