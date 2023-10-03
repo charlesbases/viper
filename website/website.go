@@ -74,11 +74,6 @@ func (inf *RsInfo) bar(count, total int) {
 	fmt.Printf("\r%s/%s: [%d/%d]", inf.RootDir, inf.Uploader, count, total)
 }
 
-// filePath .
-func (inf *RsInfo) filePath(v ...string) string {
-	return filepath.Join(append([]string{root, inf.RootDir, inf.Uploader}, v...)...)
-}
-
 // isExist .
 func (inf *RsInfo) isExist(v *RsVideoDesc) (isExist bool) {
 	if len(v.ID) == 0 {
@@ -97,8 +92,8 @@ func (inf *RsInfo) isExist(v *RsVideoDesc) (isExist bool) {
 	return
 }
 
-// position 视频下载地址
-func (inf *RsInfo) position(v *RsVideo) (string, error) {
+// abspath 视频文件全路径
+func (inf *RsInfo) abspath(v *RsVideo) (string, error) {
 	if len(inf.Uploader) == 0 {
 		return "", errors.New("unknown uploader")
 	}
@@ -108,7 +103,7 @@ func (inf *RsInfo) position(v *RsVideo) (string, error) {
 	if len(v.Parts) == 0 {
 		return "", errors.New("unknown video parts")
 	}
-	return inf.filePath(v.ID, v.Duration.Encode()), nil
+	return filepath.Join(root, inf.RootDir, inf.Uploader, strings.Join([]string{v.ID, v.Duration.Encode()}, "_")), nil
 }
 
 // RsVideoDesc .
@@ -177,22 +172,14 @@ func H(hook WebHook) error {
 				logger.Error(errors.Wrap(err, v.Link.String()))
 			} else {
 				// 获取视频下载文件名
-				if name, err := info.position(video); err != nil {
+				if abspath, err := info.abspath(video); err != nil {
 					logger.Error(errors.Wrap(err, v.Link.String()))
 				} else {
 					// 创建视频文件
-					if file, err := os.OpenFile(name, os.O_CREATE, 0644); err != nil {
+					if file, err := os.OpenFile(abspath, os.O_CREATE, 0644); err != nil {
 						logger.Error(errors.Wrap(err, v.Link.String()))
 					} else {
 						var derr error
-						defer func() {
-							file.Close()
-							if derr != nil {
-								os.Remove(name)
-							} else {
-								os.Rename(name, strings.Join([]string{name, format}, "."))
-							}
-						}()
 
 						// 视频下载
 						for _, part := range video.Parts {
@@ -200,6 +187,13 @@ func H(hook WebHook) error {
 								logger.Error(errors.Wrap(err, v.Link.String()))
 								break
 							}
+						}
+
+						file.Close()
+						if derr != nil {
+							os.Remove(abspath)
+						} else {
+							os.Rename(abspath, strings.Join([]string{abspath, format}, "."))
 						}
 					}
 				}
