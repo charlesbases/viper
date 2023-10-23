@@ -74,6 +74,11 @@ func (inf *RsInfo) bar(count, total int) {
 	fmt.Printf("\r%s/%s: [%d/%d]", inf.RootDir, inf.Uploader, count, total)
 }
 
+// mkdir .
+func (inf *RsInfo) mkdir() error {
+	return os.MkdirAll(filepath.Join(root, inf.RootDir, inf.Uploader), 0755)
+}
+
 // isExist .
 func (inf *RsInfo) isExist(v *RsVideoDesc) (isExist bool) {
 	if len(v.ID) == 0 {
@@ -153,6 +158,10 @@ func H(hook WebHook) error {
 
 	var info = hook.LinkList()
 	var total, count = len(info.LinkList), 0
+
+	if err := info.mkdir(); err != nil {
+		return err
+	}
 
 	var wgroup sync.WaitGroup
 	wgroup.Add(total)

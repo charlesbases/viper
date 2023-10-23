@@ -83,7 +83,7 @@ func (x *xvideos) LinkList() *website.RsInfo {
 		return x.inf
 	}
 
-	logger.Errorf("%s: unknown link type")
+	logger.Errorf("%s: unknown link type", x.res)
 	return nil
 }
 
