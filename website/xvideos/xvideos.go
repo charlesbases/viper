@@ -12,7 +12,7 @@ import (
 )
 
 var bestResolution = func(v string) int {
-	prefixs := []string{"hls-1080p", "hls-720p"}
+	prefixs := []string{"hls-1080p"}
 	for idx, prefix := range prefixs {
 		if strings.HasPrefix(v, prefix) {
 			return len(prefixs) - idx
@@ -106,6 +106,11 @@ func (x *xvideos) ParseVideo(v *website.RsVideoDesc) (*website.RsVideo, error) {
 			return len(x.inf.Uploader) != 0 && len(video.Hlink) != 0
 		})); err != nil {
 			logger.Error(err)
+		}
+
+		// duration
+		if video.Duration < 120 {
+			return nil, errors.New("often less than 120 seconds")
 		}
 
 		// parts
