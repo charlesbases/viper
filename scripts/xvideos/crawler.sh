@@ -11,13 +11,19 @@ ending=99999999
 header="User-Agent: Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Googlebot/2.1; +http://www.google.com/bot.html) Chrome/W.X.Y.Z Safari/537.36"
 
 while true; do
-  echo -e "\033[32m$id\033[0m"
+  echo -e "\033[35m$id\033[0m"
 
-  video=$(curl -k -H $header "https://www.xvideos.com/video$id/_" | grep 'setUploaderName\|setVideoURL' | sed "s/.*'\([^';']*\)'.*/\1/" | awk -v ORS=' ' '{print}')
-  if [[ -n $(echo $video | grep "$users") ]]; then
-    user=$(echo $video | awk '{print $1}')
-    echo $video | awk '{print "https://www.xvideos.com"$2}' >> $user.txt
+  # 是否已下载
+  if [[ -z $(find ../../resource/xvideos.com/ -type f -print | grep $id) ]]; then
+    video=$(curl -s -k --connect-timeout 30 -m 60 -H $header "https://www.xvideos.com/video$id/_" | grep 'setUploaderName\|setVideoURL' | sed "s/.*'\([^';']*\)'.*/\1/" | awk -v ORS=' ' '{print}')
+    if [[ -n $(echo $video | grep "$users") ]]; then
+      user=$(echo $video | awk '{print $1}')
+      echo -e "\033[32m[$user]\033[0m"
+
+      echo $video | awk '{print "https://www.xvideos.com"$2}' >> $user.txt
+    fi
   fi
 
-  start=$[$id+1]
+  id=$[$id+1]
+  echo
 done
