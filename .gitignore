@@ -1,6 +1,8 @@
 # file
 *.mkv
+*.mp4
 *.txt
 
 # folder
 resp/
+resource/

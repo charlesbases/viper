@@ -2,6 +2,7 @@ package website
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"github.com/pkg/errors"
 )
 
+var cookie *http.Cookie
+
 var (
 	// ErrUnknown .
 	ErrUnknown errorCode = -1
@@ -19,7 +22,7 @@ var (
 	ErrNotFound errorCode = 404
 )
 
-var defaultClient = &http.Client{Timeout: 24 * time.Hour}
+var defaultClient = &http.Client{Timeout: 15 * time.Minute}
 
 var defaultHeader = map[string]string{
 	// "Content-Type": "application/json",
@@ -40,7 +43,8 @@ type reader func(r io.Reader) error
 type Metadata struct {
 	Method string
 	Header map[string]string
-	Body   io.Reader
+	Data   interface{}
+	body   io.Reader
 }
 
 // fetch .
@@ -50,9 +54,18 @@ func fetch(l Link, fn reader, opts ...func(meta *Metadata)) error {
 		opt(meta)
 	}
 
-	req, err := http.NewRequest(meta.Method, l.String(), meta.Body)
+	if meta.Data != nil {
+		data, _ := json.Marshal(meta.Data)
+		meta.body = bytes.NewReader(data)
+	}
+
+	req, err := http.NewRequest(meta.Method, l.String(), meta.body)
 	if err != nil {
 		return errors.Wrap(err, "http")
+	}
+
+	if cookie != nil {
+		req.AddCookie(cookie)
 	}
 
 	for key, val := range defaultHeader {
@@ -70,6 +83,9 @@ func fetch(l Link, fn reader, opts ...func(meta *Metadata)) error {
 
 	switch resp.StatusCode {
 	case 200:
+		if len(resp.Cookies()) != 0 {
+			cookie = resp.Cookies()[0]
+		}
 		return errors.Wrap(fn(resp.Body), l.String())
 	case 404:
 		return errors.Wrap(ErrNotFound, l.String())

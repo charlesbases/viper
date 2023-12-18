@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/charlesbases/salmon"
 	"github.com/pkg/errors"
 
 	"github.com/charlesbases/viper/logger"
@@ -17,17 +18,39 @@ import (
 // format 视频文件格式
 const format = "mkv"
 
-// concurrent 并发下载数
-var concurrent = 10
-
 // root 视频资源文件夹
 var root = func() string {
-	if abs, err := filepath.Abs("resources"); err != nil {
+	if abs, err := filepath.Abs("resource"); err != nil {
 		panic(err)
 	} else {
 		return abs
 	}
 }()
+
+var resource = []string{}
+
+func init() {
+	filepath.Walk(root, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return filepath.SkipAll
+		}
+
+		if !info.IsDir() {
+			resource = append(resource, filepath.Base(path))
+		}
+		return nil
+	})
+}
+
+// 并发下载数
+var concurrent = 10
+
+// SetConcurrent .
+func SetConcurrent(c int) {
+	if c > 0 {
+		concurrent = c
+	}
+}
 
 // RsResolution .
 type RsResolution struct {
@@ -59,151 +82,175 @@ func NewResolutionRule(rule func(v string) int) *RsResolution {
 	return &RsResolution{rule: rule, list: make([]string, 0, 8)}
 }
 
-// RsInfo .
-type RsInfo struct {
-	// RootDir 视频下载文件夹
-	RootDir string
-	// Uploader 艺术家
-	Uploader string
-	// LinkList 视频列表
-	LinkList []*RsVideoDesc
+// Link 链接
+type Link string
+
+// String .
+func (l Link) String() string {
+	return string(l)
 }
 
-// bar 打印进度条
-func (inf *RsInfo) bar(count, total int) {
-	fmt.Printf("\r%s/%s: [%d/%d]", inf.RootDir, inf.Uploader, count, total)
+// Fetch .
+func (l Link) Fetch(fn reader, opts ...func(meta *Metadata)) error {
+	return fetch(l, fn, opts...)
 }
 
-// mkdir .
-func (inf *RsInfo) mkdir() error {
-	return os.MkdirAll(filepath.Join(root, inf.RootDir, inf.Uploader), 0755)
-}
+// Joins .
+func (l Link) Joins(v ...string) Link {
+	var br strings.Builder
+	var n = len(l.String())
 
-// isExist .
-func (inf *RsInfo) isExist(v *RsVideoDesc) (isExist bool) {
-	if len(v.ID) == 0 {
-		logger.Errorf("%s: id is empty", v.Link)
-		return true
+	for _, val := range v {
+		n += len(val)
 	}
 
-	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if !d.IsDir() && strings.HasPrefix(filepath.Base(path), v.ID) {
-			isExist = true
-			return fs.SkipAll
-		}
-		return nil
-	})
+	br.Grow(n)
+	br.WriteString(l.String())
 
-	return
-}
-
-// abspath 视频文件全路径
-func (inf *RsInfo) abspath(v *RsVideo) (string, error) {
-	if len(inf.Uploader) == 0 {
-		return "", errors.New("unknown uploader")
+	for _, val := range v {
+		br.WriteString("/")
+		br.WriteString(strings.TrimPrefix(val, "/"))
 	}
-	if v.Duration == 0 {
-		return "", errors.New("unknown video duration")
-	}
-	if len(v.Parts) == 0 {
-		return "", errors.New("unknown video parts")
-	}
-	return filepath.Join(root, inf.RootDir, inf.Uploader, strings.Join([]string{v.ID, v.Duration.Encode()}, "_")), nil
-}
-
-// RsVideoDesc .
-type RsVideoDesc struct {
-	// ID 视频 ID
-	ID string
-	// Link 网页视频链接
-	Link Link
+	return Link(br.String())
 }
 
 // RsVideo .
 type RsVideo struct {
-	RsVideoDesc
-	// Hlink hls link
-	Hlink Link
-	// Duration 视频时长
-	Duration Duration
-	// Parts parts of video
+	RsVideoHeader
+
+	// 视频文件路径
+	abspath string
+	// HLink hls link
+	HLink Link
+	// Parts of video
 	Parts []Link
 }
 
-// SetConcurrent .
-func SetConcurrent(c int) {
-	if c != 0 {
-		concurrent = c
+// RsVideoHeader .
+type RsVideoHeader struct {
+	// 视频 ID
+	ID string
+	// 网页链接
+	WebLink Link
+}
+
+// RsInfor .
+type RsInfor struct {
+	// 所有者
+	Owner string
+	// 视频网站首页
+	WebHome string
+	// 下载文件夹
+	rootDir string
+	// 视频列表
+	VideoList []*RsVideoHeader
+}
+
+// bar .
+func (infor *RsInfor) bar(count int) {
+	fmt.Printf("\r%s/%s: [%d/%d]", infor.WebHome, infor.Owner, count, len(infor.VideoList))
+}
+
+// mkdirall .
+func (infor *RsInfor) mkdirall() error {
+	infor.rootDir = filepath.Join(root, infor.WebHome, infor.Owner)
+	return os.MkdirAll(infor.rootDir, 0755)
+}
+
+// exists .
+func (infor *RsInfor) exists(header *RsVideoHeader) bool {
+	if len(header.ID) == 0 {
+		logger.Errorf("%s: id is empty", header.WebLink)
+		return true
 	}
+
+	for _, path := range resource {
+		if strings.HasPrefix(path, header.ID) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// ready .
+func (infor *RsInfor) ready(video *RsVideo) (*os.File, error) {
+	if len(infor.Owner) == 0 {
+		return nil, errors.New("unknown uploader")
+	}
+	if len(video.Parts) == 0 {
+		return nil, errors.New("unknown parts")
+	}
+
+	video.abspath = filepath.Join(infor.rootDir, video.ID)
+
+	return os.OpenFile(video.abspath, os.O_CREATE, 0644)
+}
+
+// rollback .
+func (infor *RsInfor) rollback(video *RsVideo) {
+	os.Remove(video.abspath)
+}
+
+// commit .
+func (infor *RsInfor) commit(video *RsVideo) {
+	target := strings.Join([]string{video.abspath, format}, ".")
+	os.Rename(video.abspath, target)
+
+	resource = append(resource, target)
 }
 
 // WebHook .
 type WebHook interface {
-	// WebHome 视频网站首页
-	WebHome() Link
-	// LinkList 视频链接列表
-	LinkList() *RsInfo
-	// ParseVideo 根据视频链接，获取下载地址
-	ParseVideo(v *RsVideoDesc) (*RsVideo, error)
+	// LinkList 视频列表
+	LinkList() (*RsInfor, error)
+	// VideoLink 根据视频网页链接，获取下载地址
+	VideoLink(header *RsVideoHeader) (*RsVideo, error)
 }
 
 // H .
 func H(hook WebHook) error {
-	var works = make(chan struct{}, concurrent)
-	for i := 0; i < concurrent; i++ {
-		works <- struct{}{}
-	}
-
-	var lock sync.Mutex
-
-	var info = hook.LinkList()
-	var total, count = len(info.LinkList), 0
-
-	if err := info.mkdir(); err != nil {
+	infor, err := hook.LinkList()
+	if err != nil {
 		return err
 	}
 
-	var wgroup sync.WaitGroup
-	wgroup.Add(total)
+	// 创建文件夹
+	if err := infor.mkdirall(); err != nil {
+		return err
+	}
 
-	info.bar(count, total)
-	for _, val := range info.LinkList {
-		v := val
-		go func() {
-			<-works
+	var count int
+	var lock sync.Mutex
 
-			if info.isExist(v) {
+	pool, err := salmon.NewPool(concurrent, func(v interface{}, stop func()) {
+		if header, ok := v.(*RsVideoHeader); ok {
+			if infor.exists(header) {
 				goto finshed
 			}
 
 			// 根据视频网页链接，解析下载地址
-			if video, err := hook.ParseVideo(v); err != nil {
-				logger.Error(errors.Wrap(err, v.Link.String()))
+			if video, err := hook.VideoLink(header); err != nil {
+				logger.Error(errors.Wrap(err, header.WebLink.String()))
 			} else {
-				// 获取视频下载文件名
-				if abspath, err := info.abspath(video); err != nil {
-					logger.Error(errors.Wrap(err, v.Link.String()))
+				// 创建视频文件
+				if file, err := infor.ready(video); err != nil {
+					logger.Error(errors.Wrap(err, header.WebLink.String()))
 				} else {
-					// 创建视频文件
-					if file, err := os.OpenFile(abspath, os.O_CREATE, 0644); err != nil {
-						logger.Error(errors.Wrap(err, v.Link.String()))
+					// 视频分片下载
+					var derr error
+					for _, part := range video.Parts {
+						if derr = part.Fetch(WriteTo(file)); derr != nil {
+							logger.Error(errors.Wrap(err, header.WebLink.String()))
+							break
+						}
+					}
+					file.Close()
+
+					if derr != nil {
+						infor.rollback(video)
 					} else {
-						var derr error
-
-						// 视频下载
-						for _, part := range video.Parts {
-							if derr = part.Fetch(WriteTo(file)); derr != nil {
-								logger.Error(errors.Wrap(err, v.Link.String()))
-								break
-							}
-						}
-
-						file.Close()
-						if derr != nil {
-							os.Remove(abspath)
-						} else {
-							os.Rename(abspath, strings.Join([]string{abspath, format}, "."))
-						}
+						infor.commit(video)
 					}
 				}
 			}
@@ -211,16 +258,22 @@ func H(hook WebHook) error {
 		finshed:
 			lock.Lock()
 			count++
-			info.bar(count, total)
+			infor.bar(count)
 			lock.Unlock()
-
-			wgroup.Done()
-			works <- struct{}{}
-
-		}()
+		}
+	})
+	if err != nil {
+		return err
 	}
 
-	wgroup.Wait()
+	infor.bar(count)
+
+	// 视频下载
+	for _, header := range infor.VideoList {
+		pool.Invoke(header)
+	}
+
+	pool.Wait()
 	fmt.Println(" [ok]")
 	return nil
 }
