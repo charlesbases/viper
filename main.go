@@ -3,7 +3,9 @@ package main
 import (
 	"os"
 	"regexp"
+	"sync"
 
+	"github.com/charlesbases/progressbar"
 	"github.com/urfave/cli"
 
 	"github.com/charlesbases/viper/logger"
@@ -53,14 +55,26 @@ var app = &cli.App{
 
 // dload .
 func dload(links ...string) error {
+	reader := progressbar.NewReader()
+	defer reader.Close()
+
+	var wg sync.WaitGroup
+	wg.Add(len(links))
+
 	for _, link := range links {
-		// 解析链接网站首页
-		if webhome := website.FindSubstring(home, link); len(webhome) != 0 {
-			if hook, found := homeHook[webhome]; found {
-				logger.Error(website.H(hook(website.Link(link))))
+		weblink := link
+		go func() {
+			// 解析链接网站首页
+			if webhome := website.FindSubstring(home, weblink); len(webhome) != 0 {
+				if hook, found := homeHook[webhome]; found {
+					logger.Error(website.H(reader, hook(website.Link(weblink))))
+				}
 			}
-		}
+			wg.Done()
+		}()
 	}
+
+	wg.Wait()
 	return nil
 }
 

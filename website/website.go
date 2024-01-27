@@ -1,14 +1,13 @@
 package website
 
 import (
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 
+	"github.com/charlesbases/progressbar"
 	"github.com/charlesbases/salmon"
 	"github.com/pkg/errors"
 
@@ -30,16 +29,18 @@ var root = func() string {
 var resource = []string{}
 
 func init() {
-	filepath.Walk(root, func(path string, info fs.FileInfo, err error) error {
-		if err != nil {
-			return filepath.SkipAll
-		}
+	filepath.Walk(
+		root, func(path string, info fs.FileInfo, err error) error {
+			if err != nil {
+				return filepath.SkipAll
+			}
 
-		if !info.IsDir() {
-			resource = append(resource, filepath.Base(path))
-		}
-		return nil
-	})
+			if !info.IsDir() {
+				resource = append(resource, filepath.Base(path))
+			}
+			return nil
+		},
+	)
 }
 
 // 并发下载数
@@ -69,9 +70,11 @@ func (r *RsResolution) Add(v string) {
 func (r *RsResolution) Best() string {
 	if len(r.list) != 0 {
 		// 根据 rule 规则对 list 排序
-		sort.Slice(r.list, func(i, j int) bool {
-			return r.rule(r.list[i]) > r.rule(r.list[j])
-		})
+		sort.Slice(
+			r.list, func(i, j int) bool {
+				return r.rule(r.list[i]) > r.rule(r.list[j])
+			},
+		)
 		return r.list[0]
 	}
 	return ""
@@ -139,21 +142,16 @@ type RsInfor struct {
 	// 所有者
 	Owner string
 	// 视频网站首页
-	WebHome string
+	WebHome Link
 	// 下载文件夹
 	rootDir string
 	// 视频列表
 	VideoList []*RsVideoHeader
 }
 
-// bar .
-func (infor *RsInfor) bar(count int) {
-	fmt.Printf("\r%s/%s: [%d/%d]", infor.WebHome, infor.Owner, count, len(infor.VideoList))
-}
-
 // mkdirall .
 func (infor *RsInfor) mkdirall() error {
-	infor.rootDir = filepath.Join(root, infor.WebHome, infor.Owner)
+	infor.rootDir = filepath.Join(root, infor.WebHome.String(), infor.Owner)
 	return os.MkdirAll(infor.rootDir, 0755)
 }
 
@@ -209,64 +207,61 @@ type WebHook interface {
 }
 
 // H .
-func H(hook WebHook) error {
+func H(reader *progressbar.Reader, hook WebHook) error {
 	infor, err := hook.LinkList()
 	if err != nil {
 		return err
 	}
+
+	pb := reader.NewProgress(infor.WebHome.Joins(infor.Owner).String(), uint(len(infor.VideoList)))
 
 	// 创建文件夹
 	if err := infor.mkdirall(); err != nil {
 		return err
 	}
 
-	var count int
-	var lock sync.Mutex
+	pool, err := salmon.NewPool(
+		concurrent, func(v interface{}, stop func()) {
+			if header, ok := v.(*RsVideoHeader); ok {
+				if infor.exists(header) {
+					goto finshed
+				}
 
-	pool, err := salmon.NewPool(concurrent, func(v interface{}, stop func()) {
-		if header, ok := v.(*RsVideoHeader); ok {
-			if infor.exists(header) {
-				goto finshed
-			}
-
-			// 根据视频网页链接，解析下载地址
-			if video, err := hook.VideoLink(header); err != nil {
-				logger.Error(errors.Wrap(err, header.WebLink.String()))
-			} else {
-				// 创建视频文件
-				if file, err := infor.ready(video); err != nil {
+				// 根据视频网页链接，解析下载地址
+				if video, err := hook.VideoLink(header); err != nil {
 					logger.Error(errors.Wrap(err, header.WebLink.String()))
 				} else {
-					// 视频分片下载
-					var derr error
-					for _, part := range video.Parts {
-						if derr = part.Fetch(WriteTo(file)); derr != nil {
-							logger.Error(errors.Wrap(err, header.WebLink.String()))
-							break
+					// 创建视频文件
+					if file, err := infor.ready(video); err != nil {
+						logger.Error(errors.Wrap(err, header.WebLink.String()))
+					} else {
+						// 视频分片下载
+						var derr error
+						for _, part := range video.Parts {
+							if derr = part.Fetch(WriteTo(file)); derr != nil {
+								logger.Error(errors.Wrap(err, header.WebLink.String()))
+								break
+							}
+						}
+						file.Close()
+
+						if derr != nil {
+							infor.rollback(video)
+						} else {
+							infor.commit(video)
 						}
 					}
-					file.Close()
-
-					if derr != nil {
-						infor.rollback(video)
-					} else {
-						infor.commit(video)
-					}
 				}
-			}
 
-		finshed:
-			lock.Lock()
-			count++
-			infor.bar(count)
-			lock.Unlock()
-		}
-	})
+			finshed:
+				pb.Incr(1)
+				// <-time.After(time.Second)
+			}
+		},
+	)
 	if err != nil {
 		return err
 	}
-
-	infor.bar(count)
 
 	// 视频下载
 	for _, header := range infor.VideoList {
@@ -274,6 +269,5 @@ func H(hook WebHook) error {
 	}
 
 	pool.Wait()
-	fmt.Println(" [ok]")
 	return nil
 }

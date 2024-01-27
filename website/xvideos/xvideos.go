@@ -42,10 +42,12 @@ func (x *xvideos) LinkList() (*website.RsInfor, error) {
 	switch {
 	// video
 	case regexpIsVideo.MatchString(x.src.String()):
-		x.infor.VideoList = append(x.infor.VideoList, &website.RsVideoHeader{
-			ID:      website.FindSubstring(regexpVideoID, x.src.String()),
-			WebLink: x.src,
-		})
+		x.infor.VideoList = append(
+			x.infor.VideoList, &website.RsVideoHeader{
+				ID:      website.FindSubstring(regexpVideoID, x.src.String()),
+				WebLink: x.src,
+			},
+		)
 		return x.infor, nil
 	// owner
 	case regexpIsOwner.MatchString(x.src.String()):
@@ -68,11 +70,13 @@ func (x *xvideos) LinkList() (*website.RsInfor, error) {
 				if suffix := website.FindSubstring(regexpVideoSuffix, video.U); len(suffix) != 0 {
 					weblink := home.Joins("video" + suffix)
 
-					x.infor.VideoList = append(x.infor.VideoList,
+					x.infor.VideoList = append(
+						x.infor.VideoList,
 						&website.RsVideoHeader{
 							ID:      website.FindSubstring(regexpVideoID, weblink.String()),
 							WebLink: weblink,
-						})
+						},
+					)
 				}
 			}
 			page++
@@ -87,15 +91,19 @@ func (x *xvideos) LinkList() (*website.RsInfor, error) {
 func (x *xvideos) VideoLink(header *website.RsVideoHeader) (*website.RsVideo, error) {
 	video := &website.RsVideo{RsVideoHeader: *header}
 	// hls link
-	if err := header.WebLink.Fetch(website.ReadLine(func(line string) (isBreak bool) {
-		if len(video.HLink) == 0 {
-			video.HLink = website.Link(website.FindSubstring(regexpVideoHLink, line))
-		}
-		if len(x.infor.Owner) == 0 {
-			x.infor.Owner = website.FindSubstring(regexpVideoOwnerWithHTML, line)
-		}
-		return len(x.infor.Owner) != 0 && len(video.HLink) != 0
-	})); err != nil {
+	if err := header.WebLink.Fetch(
+		website.ReadLine(
+			func(line string) (isBreak bool) {
+				if len(video.HLink) == 0 {
+					video.HLink = website.Link(website.FindSubstring(regexpVideoHLink, line))
+				}
+				if len(x.infor.Owner) == 0 {
+					x.infor.Owner = website.FindSubstring(regexpVideoOwnerWithHTML, line)
+				}
+				return len(x.infor.Owner) != 0 && len(video.HLink) != 0
+			},
+		),
+	); err != nil {
 		logger.Error(errors.Wrap(err, header.WebLink.String()))
 	}
 
@@ -111,21 +119,29 @@ func (x *xvideos) videoParts(video *website.RsVideo) *website.RsVideo {
 	var rst = website.NewResolutionRule(resolution)
 
 	// 分辨率
-	video.HLink.Joins("hls.m3u8").Fetch(website.ReadLine(func(line string) (isBreak bool) {
-		if !strings.HasPrefix(line, "#") {
-			rst.Add(line)
-		}
-		return false
-	}))
+	video.HLink.Joins("hls.m3u8").Fetch(
+		website.ReadLine(
+			func(line string) (isBreak bool) {
+				if !strings.HasPrefix(line, "#") {
+					rst.Add(line)
+				}
+				return false
+			},
+		),
+	)
 
 	// 	视频下载列表
 	video.Parts = make([]website.Link, 0)
-	video.HLink.Joins(rst.Best()).Fetch(website.ReadLine(func(line string) (isBreak bool) {
-		if !strings.HasPrefix(line, "#") {
-			video.Parts = append(video.Parts, video.HLink.Joins(line))
-		}
-		return false
-	}))
+	video.HLink.Joins(rst.Best()).Fetch(
+		website.ReadLine(
+			func(line string) (isBreak bool) {
+				if !strings.HasPrefix(line, "#") {
+					video.Parts = append(video.Parts, video.HLink.Joins(line))
+				}
+				return false
+			},
+		),
+	)
 
 	return video
 }
